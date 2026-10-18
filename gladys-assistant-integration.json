@@ -1,177 +1,315 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Velbus",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Velbus home automation (relays, dimmers, blinds, thermostats) via a network gateway.",
+    "fr": "Domotique Velbus (relais, variateurs, volets, thermostats) par une passerelle réseau."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-velbus:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-velbus/main/cover.png",
+  "categories": ["lighting", "climate"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Velbus bus",
+        "fr": "Votre bus Velbus"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "For Velbus installations reached through a network gateway: a Signum (TLS, with its password) or a TCP gateway (velserv, a USB interface shared by a TCP server...). USB directly on Gladys is not supported. The integration scans the bus for the modules: relays and dimmers become lights or switches, blinds become shutters with their position, thermostats show the temperature, the set point and the mode, push buttons become scene triggers. One connection at a time. Never tested with a real installation. Unofficial, not affiliated with Velbus.",
+        "fr": "Pour les installations Velbus joignables par une passerelle réseau : un Signum (TLS, avec son mot de passe) ou une passerelle TCP (velserv, une interface USB partagée par un serveur TCP…). L'USB branché directement sur Gladys n'est pas pris en charge. L'intégration recherche les modules sur le bus : relais et variateurs deviennent des lumières ou des interrupteurs, les volets des volets avec leur position, les thermostats donnent la température, la consigne et le mode, les boutons poussoirs deviennent des déclencheurs de scène. Une seule connexion à la fois. Jamais testé avec une vraie installation. Non officiel, sans lien avec Velbus."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-velbus/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-velbus/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "host",
+      "type": "string",
+      "label": {
+        "en": "Address of the gateway",
+        "fr": "Adresse de la passerelle"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "description": {
+        "en": "The IP address (or name) of the Signum or of the TCP gateway; give it a fixed address in your router.",
+        "fr": "L'adresse IP (ou le nom) du Signum ou de la passerelle TCP ; donnez-lui une adresse fixe dans votre box."
+      },
+      "placeholder": {
+        "en": "192.168.1.60",
+        "fr": "192.168.1.60"
+      },
+      "required": true
     },
     {
-      "key": "longitude",
+      "key": "port",
       "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+      "label": {
+        "en": "Port",
+        "fr": "Port"
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "description": {
+        "en": "27015 unless your gateway uses another one.",
+        "fr": "27015 sauf si votre passerelle en utilise un autre."
+      },
       "required": false,
-      "default": "celsius",
+      "default": 27015,
+      "min": 1,
+      "max": 65535
+    },
+    {
+      "key": "connection",
+      "type": "select",
+      "label": {
+        "en": "Kind of gateway",
+        "fr": "Type de passerelle"
+      },
+      "description": {
+        "en": "Signum: TLS. A TCP gateway: plain TCP, readable by any device of your network.",
+        "fr": "Signum : TLS. Passerelle TCP : TCP simple, lisible par tout appareil de votre réseau."
+      },
+      "required": false,
+      "default": "tcp",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        {
+          "value": "tcp",
+          "label": {
+            "en": "TCP gateway (plain)",
+            "fr": "Passerelle TCP (simple)"
+          }
+        },
+        {
+          "value": "tls",
+          "label": {
+            "en": "Signum (TLS)",
+            "fr": "Signum (TLS)"
+          }
+        }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "password",
+      "type": "secret",
+      "label": {
+        "en": "Signum password",
+        "fr": "Mot de passe du Signum"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Only if your Signum asks for one (its authentication key). Sent only over TLS, never on a plain TCP connection. Kept by Gladys in its database, never shown again, sent only to the gateway, never written in the logs.",
+        "fr": "Seulement si votre Signum en demande un (sa clé d'authentification). Envoyé seulement en TLS, jamais sur une connexion TCP simple. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à la passerelle, jamais écrit dans les journaux."
+      },
+      "required": false
+    },
+    {
+      "key": "tls_fingerprint",
+      "type": "string",
+      "label": {
+        "en": "Signum certificate fingerprint",
+        "fr": "Empreinte du certificat du Signum"
+      },
+      "description": {
+        "en": "Optional, recommended with a password: the SHA-256 fingerprint of the Signum certificate (the integration logs it at the first connection). Once set, a gateway with another certificate gets no password and the connection stops.",
+        "fr": "Facultatif, conseillé avec un mot de passe : l'empreinte SHA-256 du certificat du Signum (l'intégration l'écrit dans ses journaux à la première connexion). Une fois saisie, une passerelle avec un autre certificat ne reçoit pas le mot de passe et la connexion s'arrête."
+      },
+      "placeholder": {
+        "en": "ab:cd:...",
+        "fr": "ab:cd:..."
+      },
+      "required": false
+    },
+    {
+      "key": "relay_kinds",
+      "type": "string",
+      "label": {
+        "en": "Relays that are lights",
+        "fr": "Relais qui sont des lumières"
+      },
+      "description": {
+        "en": "Optional: the relays to show as lights, by address (hexadecimal, as in VelbusLink) and channel, e.g. \"1A-1, 1A-3, 2B-2\". The other relays are switches.",
+        "fr": "Facultatif : les relais à montrer comme des lumières, par adresse (hexadécimale, comme dans VelbusLink) et canal, par ex. « 1A-1, 1A-3, 2B-2 ». Les autres relais sont des interrupteurs."
+      },
+      "placeholder": {
+        "en": "1A-1, 1A-3",
+        "fr": "1A-1, 1A-3"
+      },
+      "required": false
+    },
+    {
+      "key": "safety",
+      "type": "section",
+      "label": {
+        "en": "Thermostats",
+        "fr": "Thermostats"
+      },
+      "description": {
+        "en": "Changing the set point or the mode of a Velbus thermostat from Gladys drives the heating: it is off by default. Once allowed, every Gladys user, every scene and the Gladys app can change them. The thermostat is read from the bus before each change; every command is written in the integration logs.",
+        "fr": "Changer la consigne ou le mode d'un thermostat Velbus depuis Gladys pilote le chauffage : c'est désactivé par défaut. Une fois autorisé, tout utilisateur de Gladys, toute scène et l'application Gladys peuvent les changer. Le thermostat est relu sur le bus avant chaque changement ; chaque commande est écrite dans les journaux de l'intégration."
+      }
+    },
+    {
+      "key": "allow_thermostat",
+      "type": "boolean",
+      "label": {
+        "en": "Allow changing the thermostats from Gladys",
+        "fr": "Autoriser le réglage des thermostats depuis Gladys"
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": false
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the names",
+        "fr": "Langue des noms"
+      },
+      "description": {
+        "en": "Used for the names of the devices and features added from now on, when a module gives no name.",
+        "fr": "Sert aux noms des appareils et fonctionnalités ajoutés désormais, quand un module ne donne pas de nom."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
     }
   ],
   "scene_triggers": [
     {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
+      "key": "button",
+      "label": {
+        "en": "Velbus push button",
+        "fr": "Bouton poussoir Velbus"
+      },
       "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+        "en": "A push button of the Velbus bus is pressed, held or released. Leave a field empty to match any value.",
+        "fr": "Un bouton poussoir du bus Velbus est appuyé, maintenu ou relâché. Laissez un champ vide pour accepter toute valeur."
       },
       "fields": [
         {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
+          "key": "module",
+          "type": "string",
+          "label": {
+            "en": "Module address (hexadecimal, e.g. 1A)",
+            "fr": "Adresse du module (hexadécimale, ex. 1A)"
+          }
         },
         {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
+          "key": "channel",
+          "type": "number",
+          "label": {
+            "en": "Channel",
+            "fr": "Canal"
+          },
+          "min": 1,
+          "max": 99
+        },
+        {
+          "key": "action",
+          "type": "select",
+          "label": {
+            "en": "Action",
+            "fr": "Action"
+          },
           "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
+            {
+              "value": "pressed",
+              "label": {
+                "en": "Pressed",
+                "fr": "Appuyé"
+              }
+            },
+            {
+              "value": "long_pressed",
+              "label": {
+                "en": "Held (long press)",
+                "fr": "Maintenu (appui long)"
+              }
+            },
+            {
+              "value": "released",
+              "label": {
+                "en": "Released",
+                "fr": "Relâché"
+              }
+            }
           ]
         }
       ],
       "variables": [
         {
-          "key": "target",
+          "key": "module",
           "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
+          "label": {
+            "en": "Module address",
+            "fr": "Adresse du module"
+          }
+        },
+        {
+          "key": "channel",
+          "type": "number",
+          "label": {
+            "en": "Channel",
+            "fr": "Canal"
+          }
+        },
+        {
+          "key": "action",
+          "type": "string",
+          "label": {
+            "en": "Action",
+            "fr": "Action"
+          }
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "label": {
+            "en": "Button name",
+            "fr": "Nom du bouton"
+          }
         }
       ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }

@@ -16,12 +16,13 @@ its only runtime dependency. It started from the official JavaScript template.
 ```bash
 npm install
 npm test                                  # node --test, the built-in runner
-node --test test/devices.test.js          # one file
-node --test --test-name-pattern "plug"    # tests whose name matches
+node --test test/app.test.js              # one file
+node --test --test-name-pattern "blind"   # tests whose name matches
 npm run lint                              # ESLint
 npm run format:check                      # Prettier, as the CI runs it
 npm run format                            # Prettier, fix in place
 npx github:GladysAssistant/integration-store .   # store admission checks
+node scripts/generate-module-table.mjs <velbus-aio>/velbusaio/module_spec
 ```
 
 The CI (`.github/workflows/ci.yml`) runs `format:check`, `lint` and `test` on
@@ -32,17 +33,34 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
-src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/handlers.js                   the SDK handlers, shared with the tests
+src/app.js                        VelbusApp: lifecycle, model, scan, devices, states, events, commands
+src/velbus/frame.js               frames: checksum, encoder, linear bounded reader (velbus-aio raw_message)
+src/velbus/messages.js            what frames mean per module type; command frames (velbus-aio messages)
+src/velbus/module-table.js        GENERATED from velbus-aio module_spec: never edit by hand
+src/velbus/modules.js             read-only lookups (Maps) over the table
+src/velbus/client.js              one TCP / TLS connection: password, queues, waiters, scan, watchdog
+src/devices.js                    model -> Gladys devices and states (pure)
+src/publisher.js                  states and scene events under the Gladys rate limits
+src/store.js                      /data: the stop after a refused password or a changed certificate
+src/config.js                     DEFAULTS (mirror the manifest defaults) + normalization
+src/constants.js, src/i18n.js     keys, timings, limits; French and English texts
+scripts/generate-module-table.mjs builds src/velbus/module-table.js (dev only, not in the image)
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, the SDK's fake Gladys + test/helpers/fakeBus.js
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
+
+Safety rules of this integration (see TODO.md "Decisions"): thermostats from
+Gladys stay off by default and are decided on a status read from the bus just
+before, the option checked again right before the write; blinds are shutters,
+never switches; a command that may have left is never reported "not sent";
+an answer is only taken from a frame received after its request; the model
+follows the frames in their order; the ack of a command never waits for the
+publication; the password is only sent over TLS and never logged; a refused
+password stops the connection, never a loop; Maps only for what the bus or
+the configuration names (no prototype pollution).
 
 ## Rules
 

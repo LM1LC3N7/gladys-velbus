@@ -12,44 +12,36 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
+- Connection to a Velbus bus through a network gateway: a Signum (TLS, with
+  its password) or a plain TCP gateway, port 27015 by default, with the
+  protocol of velbus-aio 2026.9.0 (frames, checksum, priorities, pacing).
+- Bus scan (addresses 1 to 254, sub-addresses), channel names and states of
+  83 module types; DALI modules reported as not supported.
+- Relays as switches, or lights by configuration; dimmers as lights with
+  brightness (restore to the last level when the module can); blinds as
+  shutters with their position where the module reports it.
+- Thermostats: temperature, set point, mode (comfort, day, night, frost
+  protection), heating or cooling, running.
+- Push buttons as a scene trigger `button` (module, channel, action, name).
+- A "Test the connection" button; "Scan" scans the bus again.
+- French and English names, messages and guides.
 
-### Changed
+### Security
 
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
+- Changing the thermostats from Gladys is off by default; the option is read
+  when asked, before the fresh read and right before the write; the decision
+  is taken on the thermostat status read from the bus just before.
+- The Signum password is only written on TLS, never on plain TCP, never
+  logged; two sessions closed right after it stop the connection, kept
+  across restarts in `/data` (the place only, never the password).
+- Optional SHA-256 pin of the Signum certificate: another certificate stops
+  the connection before the password is sent.
+- Commands written within 3.5 s or not at all, confirmed by the module within
+  4.5 s or reported "sent, without confirmation" with a read back; an answer
+  only taken from a frame received after its request.
+- The frame stream is read in one forward pass with a 14-byte buffer; the
+  write queues are bounded, a write buffer over 64 KB cuts the session;
+  bursts of frames are published once; button events over 120 per minute
+  are dropped.
 
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-velbus/commits/main
