@@ -1,6 +1,6 @@
 {
   "name": "gladys-velbus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Velbus home automation (relays, dimmers, blinds, thermostats, push buttons) through a network gateway (Signum or TCP). Unofficial, not affiliated with Velbus.",
   "type": "module",

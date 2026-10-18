@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-18
+
 ### Added
 
 - Connection to a Velbus bus through a network gateway: a Signum (TLS, with
@@ -70,4 +72,5 @@ the notes of the version's GitHub Release.
   says "scan in progress"; the fingerprint of a refused certificate stays in
   the status after a restart.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-velbus/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-velbus/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-velbus/releases/tag/v0.1.1
