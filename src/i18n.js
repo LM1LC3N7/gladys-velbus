@@ -130,6 +130,10 @@ export const T = {
     en: `This relay is read only in the configuration${nothing.en}`,
     fr: `Ce relais est en lecture seule dans la configuration${nothing.fr}`,
   },
+  scanInProgress: {
+    en: `The scan of the modules is in progress, try again${nothing.en}`,
+    fr: `Recherche des modules en cours, réessayez${nothing.fr}`,
+  },
   busyScanning: {
     en: `The scan of the bus is in progress and the bus is busy; try again in a moment${nothing.en}`,
     fr: `La recherche des modules est en cours et le bus est occupé ; réessayez dans un instant${nothing.fr}`,

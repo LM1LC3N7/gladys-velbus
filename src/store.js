@@ -62,7 +62,14 @@ export function normalizeMemory(raw) {
     STOP_KINDS.includes(stop.kind);
   return {
     stop: valid
-      ? { place: stop.place, kind: stop.kind, at: Number.isFinite(stop.at) ? stop.at : 0 }
+      ? {
+          place: stop.place,
+          kind: stop.kind,
+          at: Number.isFinite(stop.at) ? stop.at : 0,
+          ...(typeof stop.presented === 'string' && /^[0-9a-f]{64}$/.test(stop.presented)
+            ? { presented: stop.presented }
+            : {}),
+        }
       : null,
   };
 }

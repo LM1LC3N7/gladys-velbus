@@ -65,5 +65,9 @@ the notes of the version's GitHub Release.
   target; a relay state is published on every relay feature it has.
 - The Discovery is republished once for a batch of channel names.
 - The password is no longer trimmed; the thermostat option applies at once.
+- The command queue holds as many commands as the bus can write before their
+  deadline (59), no longer 20; a command for a channel missing during the scan
+  says "scan in progress"; the fingerprint of a refused certificate stays in
+  the status after a restart.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-velbus/commits/main

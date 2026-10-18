@@ -53,8 +53,6 @@ export const LIMITS = {
   maxSetpoint: 30,
   /** Background frames waiting (a scan is 254 of them): more are refused, nothing sent. */
   maxQueue: 600,
-  /** Commands waiting, a cap of their own: a full background queue never refuses one. */
-  maxUrgent: 20,
   /** Bytes waiting in the socket write buffer before the session is cut. */
   maxPendingWrite: 64 * 1024,
   /** States per minute sent to Gladys (the core admits 300). */
@@ -116,3 +114,10 @@ export const TIMINGS = {
   /** "Test the connection" waits this long for the session (the manifest allows 30 s). */
   testWait: 25_000,
 };
+
+/**
+ * Commands waiting, a cap of their own (a full background queue never refuses
+ * one): as many as the bus can write before the deadline of the last one
+ * (3.5 s / 60 ms = 59); the deadline already refuses what cannot leave in time.
+ */
+LIMITS.maxUrgent = Math.ceil(TIMINGS.sendBy / TIMINGS.frameGap);

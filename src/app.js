@@ -252,7 +252,7 @@ export class VelbusApp {
       this.logger.warn(
         `Velbus: stopped before (${memory.stop.kind}): no connection until the configuration changes or "Test the connection" is clicked`,
       );
-      await this.setStatus(false, this.stopMessage(memory.stop.kind));
+      await this.setStatus(false, this.stopMessage(memory.stop.kind, memory.stop.presented));
       return;
     }
     await this.setStatus(false, T.connecting);
@@ -427,7 +427,13 @@ export class VelbusApp {
       const kind = certificate ? 'certificate_changed' : silent ? 'no_frames' : 'password_refused';
       this.logger.error(`Velbus: connection stopped (${reason}), no new try`);
       const memory = await this.loadMemory();
-      memory.stop = { place: placeKey(this.config), kind, at: this.now() };
+      memory.stop = {
+        place: placeKey(this.config),
+        kind,
+        at: this.now(),
+        // Public data: kept so the status still shows it after a restart.
+        ...(certificate && presented ? { presented } : {}),
+      };
       await this.saveMemory();
       await this.setStatus(false, this.stopMessage(kind, presented, pinned));
     } else {
@@ -765,7 +771,13 @@ export class VelbusApp {
     const asked = this.now();
     const module = this.model.modules.get(target.address);
     const channel = module?.spec.channels.get(target.channel);
-    if (!channel) throw this.refused(T.unknownChannel);
+    if (!channel) {
+      // The scan replaces the model: a channel may be missing only meanwhile.
+      if (this.scanning || (this.client.connected && this.model.modules.size === 0)) {
+        throw this.refused(T.scanInProgress);
+      }
+      throw this.refused(T.unknownChannel);
+    }
     const id = `${addressText(module.address)}-${channel.num}`;
     const { kind, key } = target;
     if (kind === 'relay' && Object.hasOwn(RELAY_FEATURES, key)) {

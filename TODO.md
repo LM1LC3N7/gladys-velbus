@@ -189,7 +189,8 @@ up to date at the end of every milestone.
   logged once per minute (test: a 50 KB burst).
 - **I3**: new channel names republish the Discovery after 2 s of quiet, 10 s
   after the first at most; after a scan, at once.
-- **I4**: separate caps: 20 commands, 600 background frames (a full
+- **I4**: separate caps: ceil(sendBy / frameGap) = 59 commands (20 at first, see
+  round 1), 600 background frames (a full
   background queue never refuses a command); an identical background request
   already waiting is merged with it.
 - **I5**: a relay channel over 8 (the "Output" relay 18 of the VMBEL and
@@ -214,3 +215,15 @@ up to date at the end of every milestone.
   filter): documented, 2 upper-case hex digits. **M12**: the status shows the
   scan progress every 2 s. **M13**: the note on statuses in flight is
   nuanced above.
+
+## Decisions after the approval round 1 (2026-10-18)
+
+- The command cap is computed from the constants (3.5 s / 60 ms = 59): the
+  deadline already refuses what cannot leave in time; 35 simultaneous relay
+  commands are all written (test).
+- A channel missing while a scan runs, or with the model empty and the
+  gateway connected: "scan of the modules in progress, try again: nothing
+  was sent".
+- The fingerprint presented by a refused certificate is persisted with the
+  stop (64 hex digits, checked by normalizeMemory): public data, shown again
+  in the status after a restart.

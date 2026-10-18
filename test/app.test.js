@@ -671,3 +671,60 @@ test('M5, M10, M12: refusal during the scan, option applied at once, scan progre
   assert.equal(ctx.app.allowed(), false);
   await update;
 });
+
+test('round 1: 35 simultaneous relay commands are all written', async (t) => {
+  const modules = {};
+  for (let i = 0; i < 7; i += 1) {
+    modules[0x10 + i] = {
+      type: 0x10,
+      serial: i + 1,
+      relays: { 1: false, 2: false, 3: false, 4: false, 5: false },
+    };
+  }
+  const ctx = await setup(t, { bus: { modules } });
+  const pending = [];
+  for (let i = 0; i < 7; i += 1) {
+    for (let c = 1; c <= 5; c += 1)
+      pending.push(ctx.set('relay', `${(0x10 + i).toString(16)}-${c}`, 'switch', 1));
+  }
+  await ctx.clock.advance(6_000);
+  const acks = await Promise.all(pending);
+  assert.ok(
+    acks.every((a) => a.success),
+    acks.find((a) => !a.success)?.error,
+  );
+  assert.equal(ctx.bus.commands.filter((c) => c[1] === 0x02).length, 35);
+});
+
+test('round 1: a channel missing while the scan runs: "scan in progress", nothing sent', async (t) => {
+  const ctx = await setup(t, { scan: false });
+  await until(() => ctx.app.online);
+  const gladys = ctx.gladys;
+  const ids = gladys.externalIds('relay', '1a-1');
+  const device = { external_id: ids.device, features: [] };
+  const ack = await gladys.fake.setValue(device, { external_id: ids.feature('switch') }, 1);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /scan of the modules is in progress, try again: nothing was sent/);
+  assert.ok(!ctx.bus.log.some((f) => !f.rtr && f.data[0] === 0x02));
+});
+
+test('round 1: the presented fingerprint stays in the status after a restart', async (t) => {
+  const store = memoryStore();
+  const presented = 'ab'.repeat(32);
+  const ctx = await setup(t, {
+    config: { connection: 'tls', password: 'key', tls_fingerprint: '00'.repeat(32) },
+    bus: { password: 'key', fingerprint: presented.match(/../g).join(':').toUpperCase() },
+    store,
+    scan: false,
+  });
+  await ctx.clock.advance(1_000);
+  await ctx.app.chain;
+  assert.equal(store.data.stop.presented, presented);
+  await ctx.app.start({
+    ...BASE,
+    connection: 'tls',
+    password: 'key',
+    tls_fingerprint: '00'.repeat(32),
+  });
+  assert.match(ctx.status().message.en, /SHA-256 ab:ab:ab/);
+});
