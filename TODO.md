@@ -25,6 +25,8 @@ up to date at the end of every milestone.
       opt-in, decided on a fresh read; "Test the connection"; fr/en. Tested
       against an in-memory bus only (frames checked byte for byte against
       velbus-aio's own `RawMessage.to_bytes()`).
+- [x] **Review fixes** (2026-10-18, extra review of 4f1a6cb: 2 blocking, 6
+      important, 13 minor): see "Decisions after the review" below.
 - [ ] **Milestone 2 - real installation**: run against a Signum and a TCP
       gateway; capture real frames (anonymised) as fixtures; fix what differs
       (see below).
@@ -57,6 +59,14 @@ up to date at the end of every milestone.
 - The scan time on a large bus (254 requests 60 ms apart, then 2 s per module
   for the names).
 - Names with accents (read as ASCII here, as velbus-aio).
+- The "Output" relay (channel 18) of the VMBEL and VMBGP-20 panels: which
+  command and status drive it (published read only here, commands refused).
+- The reserved bits of the DLC byte (bits 7, 5, 4 must be 0 here): does a
+  gateway or a module ever set them?
+- Whether a gateway echoes the frames it receives from the client (an echo
+  of a type request is an RTR frame: ignored by the watchdog and the model).
+- The pace of the answers to a channel name request (up to 99 frames,
+  velbus-aio waits 2 s after it): enough on a busy bus?
 
 ## Decisions
 
@@ -90,7 +100,10 @@ up to date at the end of every milestone.
 - **An answer belongs to its request**: Velbus has no request ids; a waiter
   is registered when its frame is written and only frames received after
   that count, from the module's own addresses (main or sub-address), for the
-  channel asked. A status already on the wire never answers a later request.
+  channel asked. A status already received before the write never answers
+  a later request; a status the module sent before the request but that
+  arrives after its write is taken (the bus gives no way to tell them
+  apart, and it is still a current status of that channel).
 - **Model in the bus order**: every frame changes the model when the client
   emits it; the publication, the scene events and the device names follow
   once per event loop turn (a burst is one publication).
@@ -151,3 +164,53 @@ up to date at the end of every milestone.
   Gladys). DALI and unknown types are listed in the connection status.
 - **Not checked**: Docker is not installed on this PC, so no image build and
   no end-to-end test in a container; never run against a real installation.
+
+## Decisions after the review (2026-10-18)
+
+- **B1 - relays read only**: `switch` stays the default (as velbus-aio and
+  Home Assistant); `relay_kinds` takes a third kind, `readonly`: a state in
+  `unknown`/`binary`, `read_only`, feature key `readonly`. setValue
+  refuses every relay key (`switch`, `light`, `readonly`) of a read-only
+  relay, an old feature kept included: "read only: nothing was sent". Docs
+  and manifest warn that a switch or a light obeys Google, Alexa, the MCP and
+  the scenes, list the relays to protect (pump, ventilation, heating,
+  freezer, door strike, valve, virtual relays) and tell to delete the old
+  feature.
+- **B2 - the channel turn ends at the write**: `command()` runs the decision
+  (fresh read included) and the write in the channel's turn; the turn ends
+  as soon as the frame is written (`ticket.onWritten`) or refused; the
+  confirmation is awaited outside it. A stop or an off is written at once
+  while the command before still waits for its confirmation (test).
+- **I1**: a certificate that differs from the pin: the presented and the
+  pinned fingerprints are logged and shown in the status; the docs advise to
+  pin on a first connection without the password.
+- **I2**: button events are bounded at the entry: a frame over the budget of
+  the minute is refused before it is queued, counted (`publisher.dropped`),
+  logged once per minute (test: a 50 KB burst).
+- **I3**: new channel names republish the Discovery after 2 s of quiet, 10 s
+  after the first at most; after a scan, at once.
+- **I4**: separate caps: 20 commands, 600 background frames (a full
+  background queue never refuses a command); an identical background request
+  already waiting is merged with it.
+- **I5**: a relay channel over 8 (the "Output" relay 18 of the VMBEL and
+  VMBGP-20 panels) is published read only and its commands refused "this
+  module does not take this command" (the command carries a bitmask of 8).
+- **I6**: with a password over TLS, a session must bring a valid Velbus frame
+  within 30 s; two sessions in a row without one stop the connection (closed
+  within 10 s: "password refused"; else "no Velbus frame"), persisted as
+  `password_refused` or `no_frames`. Until a frame came, the status says
+  "connected to the gateway", never "connected to the bus".
+- **M1**: a position is confirmed by a movement or a position within 2 % of
+  the target. **M2**: a relay state goes to every relay key it has (the kind
+  of now and the old ones kept). **M3**: docs: Eco asked = Velbus "day".
+  **M4**: python-velbus notice from its own LICENSE. **M5**: a command
+  refused while the scan keeps the bus busy says so. **M6**: a command keeps
+  the pause after a name request (`nextWriteAt` never moves back). **M7**:
+  invalid frames counted, one warning per minute. **M8**: the watchdog wants
+  a non-RTR frame. **M9**: the password is taken as typed (no trim). **M10**:
+  `allow_thermostat` applies at once in configUpdated, even when the change
+  also restarts the connection. **M11**: the trigger field `module` is
+  compared by the core as written (strict equality, no hook to normalize a
+  filter): documented, 2 upper-case hex digits. **M12**: the status shows the
+  scan progress every 2 s. **M13**: the note on statuses in flight is
+  nuanced above.

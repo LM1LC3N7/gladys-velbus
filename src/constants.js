@@ -20,7 +20,7 @@ export const BUTTON_ACTIONS = ['pressed', 'long_pressed', 'released'];
 export const CONNECTIONS = ['tcp', 'tls'];
 
 /** How a relay shows in Gladys (frozen: stored in the configuration, and the feature key). */
-export const RELAY_KINDS = ['switch', 'light'];
+export const RELAY_KINDS = ['switch', 'light', 'readonly'];
 
 /** Gladys core values (server/utils/constants.js). */
 export const STATE = { OFF: 0, ON: 1 };
@@ -51,8 +51,10 @@ export const LIMITS = {
   /** Set points accepted from Gladys, in degrees (Velbus encodes -64 to 63.5). */
   minSetpoint: 5,
   maxSetpoint: 30,
-  /** Frames waiting to be written (a scan is 254 of them): more is refused, nothing sent. */
+  /** Background frames waiting (a scan is 254 of them): more are refused, nothing sent. */
   maxQueue: 600,
+  /** Commands waiting, a cap of their own: a full background queue never refuses one. */
+  maxUrgent: 20,
   /** Bytes waiting in the socket write buffer before the session is cut. */
   maxPendingWrite: 64 * 1024,
   /** States per minute sent to Gladys (the core admits 300). */
@@ -84,6 +86,16 @@ export const TIMINGS = {
   tick: 15_000,
   /** A session closed this soon after the password counts as a refusal. */
   authWindow: 10_000,
+  /** With a password, a valid Velbus frame must come this soon, else the session ends. */
+  firstFrame: 30_000,
+  /** At most one warning this often about the invalid frames dropped. */
+  dropLog: 60_000,
+  /** Discovery republished for new channel names: after this quiet time? */
+  namesQuiet: 2_000,
+  /** ?and never later than this after the first name. */
+  namesMax: 10_000,
+  /** The scan progress in the status, this often. */
+  scanStatus: 2_000,
   /**
    * Gladys waits 5 s for a set_value ack. A command is written by sendBy
    * after it was asked (else refused, nothing sent); its confirmation by the

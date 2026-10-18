@@ -34,6 +34,7 @@ export const DEVICE_NAMES = {
 export const FEATURE_NAMES = {
   switch: { fr: 'Relais', en: 'Relay' },
   light: { fr: 'Lumière', en: 'Light' },
+  readonly: { fr: 'État du relais', en: 'Relay state' },
   binary: { fr: 'Allumée', en: 'On' },
   brightness: { fr: 'Luminosité', en: 'Brightness' },
   state: { fr: 'Ouvrir / fermer', en: 'Open / close' },
@@ -78,8 +79,9 @@ export const T = {
   },
   connecting: { en: 'Connecting to the Velbus gateway…', fr: 'Connexion à la passerelle Velbus…' },
   scanning: {
-    en: (sent, of) => `Connected; scanning the Velbus bus (${sent}/${of})…`,
-    fr: (sent, of) => `Connecté ; recherche des modules sur le bus Velbus (${sent}/${of})…`,
+    en: (sent, of) => `Connected to the gateway; scanning the Velbus bus (${sent}/${of})…`,
+    fr: (sent, of) =>
+      `Connecté à la passerelle ; recherche des modules sur le bus Velbus (${sent}/${of})…`,
   },
   connected: {
     en: (modules, channels, extra) =>
@@ -111,8 +113,26 @@ export const T = {
     fr: 'La passerelle a fermé la connexion juste après le mot de passe, deux fois : il est sans doute faux. Connexion arrêtée, sans nouvel essai. Corrigez-le puis enregistrez, ou cliquez sur « Tester la connexion ».',
   },
   certificate: {
-    en: 'The certificate of the gateway is not the pinned one: connection stopped, the password was not sent. If the Signum was reset, enter its new fingerprint (see the logs), then save.',
-    fr: "Le certificat de la passerelle n'est pas celui épinglé : connexion arrêtée, le mot de passe n'a pas été envoyé. Si le Signum a été réinitialisé, saisissez sa nouvelle empreinte (voir les journaux), puis enregistrez.",
+    en: (presented, pinned) =>
+      `The certificate of the gateway (SHA-256 ${presented}) is not the pinned one (${pinned}): connection stopped, the password was not sent. If the Signum was reset, check it on a connection without password, enter its new fingerprint, then save.`,
+    fr: (presented, pinned) =>
+      `Le certificat de la passerelle (SHA-256 ${presented}) n'est pas celui épinglé (${pinned}) : connexion arrêtée, le mot de passe n'a pas été envoyé. Si le Signum a été réinitialisé, vérifiez-le sur une connexion sans mot de passe, saisissez sa nouvelle empreinte, puis enregistrez.`,
+  },
+  silent: {
+    en: 'The gateway took the password but sent no Velbus frame, twice: the password may be wrong, or it is not a Velbus gateway. Connection stopped, no new try. Check, then save, or click "Test the connection".',
+    fr: "La passerelle a pris le mot de passe mais n'a envoyé aucune trame Velbus, deux fois : le mot de passe est peut-être faux, ou ce n'est pas une passerelle Velbus. Connexion arrêtée, sans nouvel essai. Vérifiez puis enregistrez, ou cliquez sur « Tester la connexion ».",
+  },
+  waitingBus: {
+    en: 'Connected to the gateway, but no Velbus frame received yet.',
+    fr: "Connecté à la passerelle, mais aucune trame Velbus reçue pour l'instant.",
+  },
+  readOnly: {
+    en: `This relay is read only in the configuration${nothing.en}`,
+    fr: `Ce relais est en lecture seule dans la configuration${nothing.fr}`,
+  },
+  busyScanning: {
+    en: `The scan of the bus is in progress and the bus is busy; try again in a moment${nothing.en}`,
+    fr: `La recherche des modules est en cours et le bus est occupé ; réessayez dans un instant${nothing.fr}`,
   },
   offline: {
     en: `The Velbus gateway is not connected${nothing.en}`,

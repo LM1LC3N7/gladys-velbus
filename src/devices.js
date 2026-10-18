@@ -67,6 +67,8 @@ const reading = (category, type, extra = {}) => ({
 export const RELAY_FEATURES = {
   switch: command(C.SWITCH, T.SWITCH.BINARY, { min: 0, max: 1 }),
   light: command(C.LIGHT, T.LIGHT.BINARY, { min: 0, max: 1 }),
+  // A state only: no voice assistant, scene or "turn everything off" can drive it.
+  readonly: reading(C.UNKNOWN, T.SENSOR.BINARY, { min: 0, max: 1 }),
 };
 
 export const DIMMER_FEATURES = {
@@ -165,9 +167,13 @@ export function parseFeatureId(externalId) {
   };
 }
 
-/** The kind of a relay: the configured one, else a switch. */
+/**
+ * The kind of a relay: the configured one, else a switch. A relay channel over
+ * 8 (the "Output" relays of the VMBEL and VMBGP-20 panels) is read only: the
+ * commands carry the channel as a bitmask of 8.
+ */
 export const relayKind = (config, address, channel) =>
-  config.relayKinds.get(channelKey(address, channel)) ?? 'switch';
+  channel > 8 ? 'readonly' : (config.relayKinds.get(channelKey(address, channel)) ?? 'switch');
 
 /** What a discovered feature declares (a created one also has ids, values, dates). */
 const FEATURE_FIELDS = [
@@ -278,8 +284,18 @@ export function blindState(state) {
 }
 
 /** Every known state: `[{ device_feature_external_id, state }]`. */
-export function buildStates(gladys, config, model) {
+export function buildStates(gladys, config, model, created = gladys.devices) {
   const states = [];
+  const createdKeys = new Map(
+    (created ?? []).map((device) => [
+      device.external_id,
+      (device.features ?? []).map((f) =>
+        String(f?.external_id ?? '')
+          .split(':')
+          .at(-1),
+      ),
+    ]),
+  );
   for (const [module, channel, kind] of shownChannels(model)) {
     const state = module.channels.get(channel.num);
     if (!state) continue;
@@ -289,8 +305,14 @@ export function buildStates(gladys, config, model) {
       states.push({ device_feature_external_id: deviceIds.feature(key), state: value });
     };
     if (kind === 'relay') {
-      if (state.on !== undefined)
-        push(relayKind(config, module.address, channel.num), flag(state.on));
+      if (state.on !== undefined) {
+        // The kind of now, and the older relay features the user kept.
+        const keys = new Set([relayKind(config, module.address, channel.num)]);
+        for (const key of createdKeys.get(deviceIds.device) ?? []) {
+          if (Object.hasOwn(RELAY_FEATURES, key)) keys.add(key);
+        }
+        for (const key of keys) push(key, flag(state.on));
+      }
     } else if (kind === 'dimmer') {
       if (state.level !== undefined) {
         const scale = module.spec.sliderScale || 100;

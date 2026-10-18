@@ -50,7 +50,7 @@ export function memoryStore(initial = null) {
   };
 }
 
-export const STOP_KINDS = ['password_refused', 'certificate_changed'];
+export const STOP_KINDS = ['password_refused', 'no_frames', 'certificate_changed'];
 
 /** The persisted state, repaired: { stop: { place, kind, at } | null }. */
 export function normalizeMemory(raw) {

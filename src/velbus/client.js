@@ -51,6 +51,8 @@ export class VelbusError extends Error {
   }
 }
 
+const colons = (hex) => (hex ? hex.match(/../g).join(':') : '?');
+
 /** `AB:CD:...` (Node's fingerprint256) -> `abcd...`. */
 export const fingerprintOf = (certificate) =>
   String(certificate?.fingerprint256 ?? '')
@@ -143,7 +145,7 @@ export class VelbusClient extends EventEmitter {
   }
 
   clearTimers() {
-    for (const name of ['connectTimer', 'pumpTimer']) {
+    for (const name of ['connectTimer', 'pumpTimer', 'firstFrameTimer']) {
       if (this[name]) {
         this.timers.clearTimeout(this[name]);
         this[name] = undefined;
@@ -184,12 +186,11 @@ export class VelbusClient extends EventEmitter {
       onFrame: (frame) => {
         if (generation === this.generation) this.frame(frame);
       },
-      onDrop: () => {
-        this.dropped = (this.dropped ?? 0) + 1;
-      },
+      onDrop: () => this.noteDrop(),
     });
     this.receivedAny = false;
     this.authAt = undefined;
+    this.presented = '';
     this.logger.debug(
       `Connecting to the Velbus gateway at ${host}:${port} (${tls ? 'TLS' : 'TCP'})`,
     );
@@ -222,14 +223,24 @@ export class VelbusClient extends EventEmitter {
     socket.on('close', () => this.lost(generation, 'connection closed by the gateway'));
   }
 
+  /** Bytes the reader dropped: counted, one warning per minute at most. */
+  noteDrop() {
+    this.dropped = (this.dropped ?? 0) + 1;
+    if (this.dropLoggedAt === undefined || this.now() - this.dropLoggedAt >= TIMINGS.dropLog) {
+      this.dropLoggedAt = this.now();
+      this.logger.warn(`Velbus: invalid frames dropped (${this.dropped} since the start)`);
+    }
+  }
+
   session(generation, socket) {
     const { tls, password, fingerprint } = this.options;
     let seen = '';
     if (tls) {
       seen = fingerprintOf(socket.getPeerCertificate?.());
+      this.presented = seen;
       if (fingerprint && seen !== fingerprint) {
         this.logger.error(
-          'Velbus: the certificate of the gateway is not the pinned one: connection stopped',
+          `Velbus: the certificate of the gateway (SHA-256 ${colons(seen)}) is not the pinned one (${colons(fingerprint)}): connection stopped`,
         );
         this.lost(generation, 'certificate not the pinned one', { certificate: true });
         return;
@@ -245,6 +256,12 @@ export class VelbusClient extends EventEmitter {
       }
       this.authAt = this.now();
       this.logger.debug('Velbus <- password (hidden)');
+      // A gateway that took the password must bring Velbus frames (the scan
+      // asks every module): none in time ends the session, and counts.
+      this.firstFrameTimer = this.timers.setTimeout(() => {
+        this.firstFrameTimer = undefined;
+        if (!this.receivedAny) this.lost(generation, 'no Velbus frame after the password');
+      }, TIMINGS.firstFrame);
     }
     this.ready = true;
     this.lastReceived = this.now();
@@ -258,25 +275,30 @@ export class VelbusClient extends EventEmitter {
     if (generation !== this.generation) return;
     this.generation += 1;
     const wasUp = this.ready;
-    // Closed right after the password, before the bus said anything: the
-    // gateway probably refused it.
-    const authDrop =
-      wasUp &&
-      this.authAt !== undefined &&
-      !this.receivedAny &&
-      this.now() - this.authAt < TIMINGS.authWindow;
+    // A session with the password that ended before any valid Velbus frame:
+    // the gateway probably refused it (closed at once), or is not a Velbus
+    // gateway (nothing came).
+    const authDrop = wasUp && this.authAt !== undefined && !this.receivedAny;
+    const quick = authDrop && this.now() - this.authAt < TIMINGS.authWindow;
+    const presented = this.presented;
     this.close();
     if (!this.running) return;
     let refused = false;
+    let silent = false;
     if (authDrop) {
       this.authDrops += 1;
-      refused = this.authDrops >= LIMITS.authDrops;
-      if (refused) reason = 'connection closed right after the password, twice';
-    } else if (wasUp) {
+      if (this.authDrops >= LIMITS.authDrops) {
+        refused = quick;
+        silent = !quick;
+        reason = quick
+          ? 'connection closed right after the password, twice'
+          : 'no Velbus frame after the password, twice';
+      }
+    } else if (wasUp && this.receivedAny) {
       this.authDrops = 0;
     }
     let retryIn;
-    if (refused || certificate) {
+    if (refused || silent || certificate) {
       // Never again by itself: a refused password is not tried in a loop, a
       // password is never sent to a gateway that is not the pinned one.
       this.running = false;
@@ -288,7 +310,16 @@ export class VelbusClient extends EventEmitter {
         if (this.running) this.open();
       }, retryIn);
     }
-    this.emit('down', { reason, retryIn, refused, certificate, wasUp });
+    this.emit('down', {
+      reason,
+      retryIn,
+      refused,
+      silent,
+      certificate,
+      wasUp,
+      presented,
+      pinned: this.options.fingerprint,
+    });
   }
 
   tick(generation) {
@@ -299,7 +330,8 @@ export class VelbusClient extends EventEmitter {
     this.probing = true;
     this.send(typeRequest(address), {
       urgent: true,
-      wait: { match: () => true, timeout: TIMINGS.probeTimeout },
+      // Any frame of a module: not an RTR request (an echo, another client's scan).
+      wait: { match: (frame) => !frame.rtr, timeout: TIMINGS.probeTimeout },
     }).then(
       () => {
         this.probing = false;
@@ -319,7 +351,10 @@ export class VelbusClient extends EventEmitter {
 
   /** A frame from the bus: to the app first (its model follows the bus order), then the waiters. */
   frame(frame) {
-    this.receivedAny = true;
+    if (!this.receivedAny) {
+      this.receivedAny = true;
+      this.emit('alive');
+    }
     for (const collect of this.collectors) collect(frame);
     this.emit('frame', frame);
     for (const waiter of [...this.waiters]) {
@@ -353,10 +388,6 @@ export class VelbusClient extends EventEmitter {
         reject(new VelbusError('Not connected to the bus', 'offline'));
         return;
       }
-      if (this.urgent.length + this.background.length >= LIMITS.maxQueue) {
-        reject(new VelbusError('Too many frames waiting for the bus', 'full'));
-        return;
-      }
       let bytes;
       try {
         bytes = encode(frame);
@@ -364,8 +395,38 @@ export class VelbusClient extends EventEmitter {
         reject(new VelbusError(err.message, 'offline'));
         return;
       }
-      const entry = { bytes, frame, sendBy, check, ticket, wait, gap, resolve, reject, label };
-      (urgent ? this.urgent : this.background).push(entry);
+      if (!urgent && !wait) {
+        // The same background request already waiting: one frame for both.
+        const key = bytes.toString('hex');
+        const twin = this.background.find((e) => !e.wait && e.key === key);
+        if (twin) {
+          twin.followers.push({ resolve, reject });
+          return;
+        }
+      }
+      // Separate caps: a full background queue (a scan, a flood of reads)
+      // never refuses a command, and commands cannot pile up either.
+      const queue = urgent ? this.urgent : this.background;
+      if (queue.length >= (urgent ? LIMITS.maxUrgent : LIMITS.maxQueue)) {
+        reject(new VelbusError('Too many frames waiting for the bus', 'full'));
+        return;
+      }
+      const followers = [{ resolve, reject }];
+      const entry = {
+        bytes,
+        key: bytes.toString('hex'),
+        frame,
+        sendBy,
+        check,
+        ticket,
+        wait,
+        gap,
+        label,
+        followers,
+        resolve: (value) => followers.forEach((f) => f.resolve(value)),
+        reject: (err) => followers.forEach((f) => f.reject(err)),
+      };
+      queue.push(entry);
       this.pump();
     });
   }
@@ -415,9 +476,11 @@ export class VelbusClient extends EventEmitter {
       this.lost(generation, err.message);
       return;
     }
+    entry.ticket.onWritten?.();
     if (entry.label) this.logger.debug(`Velbus <- ${entry.label}`);
     this.lastWriteAt = this.now();
-    this.nextWriteAt = this.lastWriteAt + entry.gap;
+    // A command written during the long pause after a name request keeps it.
+    this.nextWriteAt = Math.max(this.nextWriteAt, this.lastWriteAt + entry.gap);
     if ((this.socket?.writableLength ?? 0) > LIMITS.maxPendingWrite) {
       this.logger.warn('Velbus: too much data waiting to be written, session cut');
       entry.reject(new VelbusError('Write buffer full', 'lost', { sent: true }));

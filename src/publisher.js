@@ -197,19 +197,29 @@ export class StatePublisher {
     }, this.budget.wait || 1_000);
   }
 
-  /** A scene event, dropped over the budget (one log line per minute at most). */
-  async sceneEvent(key, data) {
+  /**
+   * Takes one scene event from the budget of the minute, when the event comes
+   * in: false over it (counted, one log line per minute at most), so a flood
+   * of button frames is refused at the entry, never queued.
+   */
+  reserveEvent() {
     if (this.events.left <= 0) {
       this.dropped += 1;
       if (this.droppedSince === undefined || this.now() - this.droppedSince >= WINDOW) {
         this.logger.warn(
-          `Scene events dropped: more than ${LIMITS.eventsPerMinute} per minute (${this.dropped} so far)`,
+          `Scene events refused: more than ${LIMITS.eventsPerMinute} per minute (${this.dropped} so far)`,
         );
         this.droppedSince = this.now();
       }
-      return;
+      return false;
     }
     this.events.spend(1);
+    return true;
+  }
+
+  /** A scene event; `reserved`: its budget was taken by reserveEvent(). */
+  async sceneEvent(key, data, { reserved = false } = {}) {
+    if (!reserved && !this.reserveEvent()) return;
     try {
       await this.gladys.publishSceneEvent(key, data);
     } catch (err) {

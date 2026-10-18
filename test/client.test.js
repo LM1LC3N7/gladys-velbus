@@ -90,9 +90,11 @@ test('deadlines, bounded queue, withdrawn before the write', async (t) => {
   await clock.advance(100);
   const why = await withdrawn;
   assert.ok(why.kind === 'withdrawn' && !why.sent);
+  // Distinct background frames (identical ones are merged, see below).
   const many = [];
   for (let i = 0; i < LIMITS.maxQueue + 5; i += 1) {
-    many.push(client.send(statusRequest(RELAYS, 0x1a)).catch((err) => err.kind));
+    const frame = { priority: 0xfb, address: 1 + (i % 254), data: [0xfa, Math.floor(i / 254)] };
+    many.push(client.send(frame).catch((err) => err.kind));
   }
   // The first one is written at once: the queue holds maxQueue of the others.
   const kinds = await Promise.race([
@@ -100,6 +102,16 @@ test('deadlines, bounded queue, withdrawn before the write', async (t) => {
     new Promise((r) => setTimeout(r, 1_000, 'stuck')),
   ]);
   assert.deepEqual(kinds, new Array(4).fill('full'));
+  // The background queue full: a command still goes, before it.
+  const command = client.send(relayCommand(RELAYS, 0x1a, 2, true), { urgent: true });
+  await clock.advance(100);
+  assert.deepEqual(await command, { written: true });
+  // An identical background request waiting: merged, one frame for both.
+  const before = client.background.length;
+  const a = client.send(statusRequest(RELAYS, 0x30)).catch((err) => err.kind);
+  const b = client.send(statusRequest(RELAYS, 0x30)).catch((err) => err.kind);
+  assert.equal(client.background.length, before, 'the queue is full: both refused together');
+  assert.deepEqual([await a, await b], ['full', 'full']);
   client.stop();
   // Stopped: the written one resolved, every waiting one fails "not sent".
   const results = await Promise.all(many.slice(0, 50));
@@ -132,4 +144,54 @@ test('a flood of bytes waiting to be written cuts the session', async (t) => {
   await assert.rejects(client.send(statusRequest(RELAYS, 0x1a)), (err) => err.sent);
   await clock.advance(10);
   assert.equal(downs[0].reason, 'write buffer full');
+});
+
+test('identical background requests are merged; a command keeps the pause after a name request', async (t) => {
+  const { clock, bus, client } = await setup(t);
+  const name = { priority: 0xfb, address: 0x1a, data: [0xef, 0x1f] };
+  await client.send(name, { gap: TIMINGS.nameGap });
+  const a = client.send(statusRequest(RELAYS, 0x30));
+  const b = client.send(statusRequest(RELAYS, 0x30));
+  assert.equal(client.background.length, 1, 'one frame for both');
+  // A command during the pause: written at once, the pause still holds.
+  await clock.advance(100);
+  await client.send(relayCommand(RELAYS, 0x1a, 1, true), { urgent: true });
+  await clock.advance(500);
+  assert.equal(bus.log.filter((f) => f.address === 0x30).length, 0, 'still in the pause');
+  await clock.advance(TIMINGS.nameGap);
+  await Promise.all([a, b]);
+  assert.equal(bus.log.filter((f) => f.address === 0x30).length, 1);
+});
+
+test('the watchdog wants a module frame: an RTR echo does not count', async (t) => {
+  const { clock, bus, client } = await setup(t);
+  client.probeAddress = () => 0x1a;
+  const downs = [];
+  client.on('down', (info) => downs.push(info));
+  // The gateway echoes the request but no module answers.
+  bus.hold = (f) => {
+    if (f.rtr) bus.current.send(f.priority, f.address, [], true);
+    return true;
+  };
+  await clock.advance(TIMINGS.idleProbe + TIMINGS.tick + TIMINGS.probeTimeout);
+  assert.equal(downs[0]?.reason, 'no answer from the bus');
+});
+
+test('invalid bytes: counted, one warning per minute', async (t) => {
+  const clock = new FakeClock();
+  const bus = new FakeBus();
+  const lines = [];
+  const logger = { debug() {}, info() {}, error() {}, warn: (m) => lines.push(m) };
+  const client = new VelbusClient({ connect: bus.connect, timers: clock, now: clock.now, logger });
+  client.configure({ host: '192.0.2.1', port: 27015, tls: false });
+  client.start();
+  t.after(() => client.stop());
+  await until(() => client.connected);
+  for (let i = 0; i < 100; i += 1) bus.current.raw([0x0f, 0x00]);
+  await settle();
+  assert.equal(lines.filter((l) => /invalid frames dropped/.test(l)).length, 1);
+  await clock.advance(TIMINGS.dropLog);
+  bus.current.raw([0x0f, 0x00]);
+  await settle();
+  assert.equal(lines.filter((l) => /invalid frames dropped \(101/.test(l)).length, 1);
 });

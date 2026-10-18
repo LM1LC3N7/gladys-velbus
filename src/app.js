@@ -23,10 +23,12 @@ import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sd
 import { channelKey, normalizeConfig, placeKey, sessionKey } from './config.js';
 import { COVER_STATE, LIMITS, PRESET_FROM_GLADYS, SCENE_TRIGGERS, TIMINGS } from './constants.js';
 import {
+  RELAY_FEATURES,
   buildDevices,
   buildStates,
   hasPosition,
   parseFeatureId,
+  relayKind,
   shownChannels,
 } from './devices.js';
 import { COMMAND_NAMES, T, fill, word } from './i18n.js';
@@ -54,6 +56,8 @@ import { fileStore, normalizeMemory } from './store.js';
 
 /** A command refused before anything was sent to the bus. */
 export class Refused extends Error {}
+
+const colons = (hex) => (hex ? hex.match(/../g).join(':') : '?');
 
 const SUB_COMMANDS = new Set([CMD.SUB_TYPE, CMD.SUB_TYPE_2, CMD.SUB_TYPE_3]);
 
@@ -153,7 +157,6 @@ export class VelbusApp {
     this.readBacks = new Set();
     this.starting = Promise.resolve();
     this.pendingEvents = [];
-    this.devicesDirty = false;
     this.flushScheduled = false;
     this.certificateLogged = undefined;
     this.client.on('up', (info) => {
@@ -165,6 +168,7 @@ export class VelbusApp {
       this.online = false;
       this.guard(() => this.onDown(info, wasOnline));
     });
+    this.client.on('alive', () => this.guard(() => this.onAlive()));
     // Applied at once, in the order of the bus.
     this.client.on('frame', (frame) => this.applyFrame(frame));
   }
@@ -248,15 +252,19 @@ export class VelbusApp {
       this.logger.warn(
         `Velbus: stopped before (${memory.stop.kind}): no connection until the configuration changes or "Test the connection" is clicked`,
       );
-      await this.setStatus(
-        false,
-        memory.stop.kind === 'certificate_changed' ? T.certificate : T.refused,
-      );
+      await this.setStatus(false, this.stopMessage(memory.stop.kind));
       return;
     }
     await this.setStatus(false, T.connecting);
     this.connect();
     this.startSweeper();
+  }
+
+  stopMessage(kind, presented, pinned) {
+    if (kind === 'certificate_changed') {
+      return fill(T.certificate, colons(presented), colons(pinned ?? this.config.fingerprint));
+    }
+    return kind === 'no_frames' ? T.silent : T.refused;
   }
 
   connect() {
@@ -289,6 +297,8 @@ export class VelbusApp {
     }
     for (const timer of this.readBacks) this.timers.clearTimeout(timer);
     this.readBacks.clear();
+    this.cancelNames();
+    this.stopScanStatus();
   }
 
   configProblem() {
@@ -326,13 +336,15 @@ export class VelbusApp {
   async configUpdated(raw = {}) {
     const next = normalizeConfig(raw);
     if (sessionKey(next) !== this.key) {
+      // The thermostat option holds at once, even while the restart waits.
+      this.config = { ...this.config, allowThermostat: next.allowThermostat };
       await this.liftStop();
       return this.start(raw);
     }
     this.config = next;
     await this.publishDevices();
     await this.publishStates();
-    if (this.online && !this.scanning) await this.setStatus(true, this.connectedMessage());
+    if (this.online && !this.scanning) await this.setStatus(true, this.onlineMessage());
     return undefined;
   }
 
@@ -350,6 +362,11 @@ export class VelbusApp {
     await this.gladys
       .setConnectionStatus(connected, message)
       .catch((err) => this.logger.warn(`setConnectionStatus failed: ${err.message}`));
+  }
+
+  /** "Connected to the bus" only once a Velbus frame came in this session. */
+  onlineMessage() {
+    return this.client.receivedAny ? this.connectedMessage() : T.waitingBus;
   }
 
   connectedMessage() {
@@ -395,18 +412,24 @@ export class VelbusApp {
       return;
     }
     this.loadModules({ names: false });
-    await this.setStatus(true, this.connectedMessage());
+    await this.setStatus(true, this.onlineMessage());
   }
 
-  async onDown({ reason, retryIn, refused, certificate }, wasOnline) {
+  /** The first Velbus frame of a session: now the bus is known to answer. */
+  async onAlive() {
+    if (this.client.connected && !this.scanning)
+      await this.setStatus(true, this.connectedMessage());
+  }
+
+  async onDown({ reason, retryIn, refused, silent, certificate, presented, pinned }, wasOnline) {
     const seconds = Math.round((retryIn ?? 0) / 1000);
-    if (refused || certificate) {
-      const kind = certificate ? 'certificate_changed' : 'password_refused';
+    if (refused || silent || certificate) {
+      const kind = certificate ? 'certificate_changed' : silent ? 'no_frames' : 'password_refused';
       this.logger.error(`Velbus: connection stopped (${reason}), no new try`);
       const memory = await this.loadMemory();
       memory.stop = { place: placeKey(this.config), kind, at: this.now() };
       await this.saveMemory();
-      await this.setStatus(false, certificate ? T.certificate : T.refused);
+      await this.setStatus(false, this.stopMessage(kind, presented, pinned));
     } else {
       this.logger.warn(`Velbus: ${reason}; next try in ${seconds} s`);
       await this.setStatus(false, fill(T.unreachable, reason, seconds));
@@ -421,6 +444,11 @@ export class VelbusApp {
     if (this.scanning) return this.scanning;
     const run = (async () => {
       await this.setStatus(true, fill(T.scanning, 0, LIMITS.maxAddress));
+      this.scanStatus = this.timers.setInterval(() => {
+        const progress = this.client.progress;
+        if (progress)
+          this.guard(() => this.setStatus(true, fill(T.scanning, progress.sent, progress.of)));
+      }, TIMINGS.scanStatus);
       let result;
       try {
         result = await this.client.scan();
@@ -431,6 +459,8 @@ export class VelbusApp {
         return;
       }
       this.applyScan(result);
+      // Published at once: a name republication waiting is part of it.
+      this.cancelNames();
       await this.guard(async () => {
         await this.publishDevices();
         await this.publishStates();
@@ -440,9 +470,41 @@ export class VelbusApp {
     })();
     this.scanning = run.finally(async () => {
       this.scanning = undefined;
-      if (this.client.connected) await this.setStatus(true, this.connectedMessage());
+      this.stopScanStatus();
+      if (this.client.connected) await this.guard(() => this.setStatus(true, this.onlineMessage()));
     });
     return this.scanning;
+  }
+
+  stopScanStatus() {
+    if (this.scanStatus) this.timers.clearInterval(this.scanStatus);
+    this.scanStatus = undefined;
+  }
+
+  /**
+   * New channel names: the Discovery is published again once they stop
+   * coming for 2 s, 10 s after the first one at most (a module sends its names
+   * one by one).
+   */
+  scheduleDevices() {
+    const now = this.now();
+    if (this.namesFirst === undefined) this.namesFirst = now;
+    if (this.namesTimer) this.timers.clearTimeout(this.namesTimer);
+    const delay = Math.max(
+      0,
+      Math.min(TIMINGS.namesQuiet, this.namesFirst + TIMINGS.namesMax - now),
+    );
+    this.namesTimer = this.timers.setTimeout(() => {
+      this.namesTimer = undefined;
+      this.namesFirst = undefined;
+      this.guard(() => this.publishDevices());
+    }, delay);
+  }
+
+  cancelNames() {
+    if (this.namesTimer) this.timers.clearTimeout(this.namesTimer);
+    this.namesTimer = undefined;
+    this.namesFirst = undefined;
   }
 
   /** The modules of a finished scan (synchronous: no frame comes in between). */
@@ -539,15 +601,16 @@ export class VelbusApp {
     if (updates.length === 0) return;
     const events = [];
     let changed = false;
-    let devices = false;
     for (const update of updates) {
       const { channel } = update;
       if (update.kind === 'button') {
-        events.push({ module, channel, action: update.action });
+        // Bounded at the entry: over the budget of the minute, refused here,
+        // never queued (a flood costs a counter, not memory).
+        if (this.publisher.reserveEvent()) events.push({ module, channel, action: update.action });
         continue;
       }
       if (update.kind === 'name') {
-        if (this.applyName(module, update)) devices = true;
+        if (this.applyName(module, update)) this.scheduleDevices();
         continue;
       }
       if (!module.channels.has(channel)) module.channels.set(channel, {});
@@ -575,7 +638,7 @@ export class VelbusApp {
         mergeTemperature(state, update.current, 1 / 2);
       }
     }
-    if (changed || devices || events.length > 0) this.noteChange(events, devices);
+    if (changed || events.length > 0) this.noteChange(events);
   }
 
   /** A part of a channel name; true when a whole new name is known. */
@@ -591,9 +654,8 @@ export class VelbusApp {
     return true;
   }
 
-  noteChange(events, devices) {
+  noteChange(events) {
     this.pendingEvents.push(...events);
-    if (devices) this.devicesDirty = true;
     if (this.flushScheduled) return;
     this.flushScheduled = true;
     setImmediate(() => {
@@ -604,22 +666,17 @@ export class VelbusApp {
 
   async flushChanges() {
     const events = this.pendingEvents.splice(0);
-    if (this.devicesDirty) {
-      this.devicesDirty = false;
-      await this.publishDevices();
-    }
     await this.publishStates();
     for (const event of events) await this.buttonEvent(event);
   }
 
   async buttonEvent({ module, channel, action }) {
     const name = module.names.get(channel) || module.spec.channels.get(channel)?.name || '';
-    await this.publisher.sceneEvent(SCENE_TRIGGERS.BUTTON, {
-      module: addressText(module.address),
-      channel,
-      action,
-      name,
-    });
+    await this.publisher.sceneEvent(
+      SCENE_TRIGGERS.BUTTON,
+      { module: addressText(module.address), channel, action, name },
+      { reserved: true },
+    );
   }
 
   // --- Gladys ----------------------------------------------------------------
@@ -672,7 +729,7 @@ export class VelbusApp {
 
   // --- Commands --------------------------------------------------------------
 
-  /** One command at a time per channel; a failed one never blocks the next. */
+  /** One turn at a time per channel; a failed one never blocks the next. */
   serial(key, fn) {
     const previous = this.chains.get(key) ?? Promise.resolve();
     const run = previous.then(fn, fn);
@@ -684,6 +741,24 @@ export class VelbusApp {
     return run;
   }
 
+  /**
+   * One command of a channel. `prepare` runs in the channel's turn, decides
+   * (fresh read included) and gives the job, or nothing to send. The turn
+   * ends as soon as the frame is written or refused: the confirmation is
+   * awaited outside it, so a stop or an off never waits for the
+   * confirmation of the command before it.
+   */
+  async command(key, prepare) {
+    let job;
+    await this.serial(key, async () => {
+      const next = await prepare();
+      if (!next) return;
+      job = this.write(next);
+      await job.written;
+    });
+    if (job) await job.done;
+  }
+
   async setValue(_device, feature, value) {
     const target = parseFeatureId(feature?.external_id);
     if (!target) throw new Error(`${feature?.external_id} is not a Velbus feature`);
@@ -693,7 +768,17 @@ export class VelbusApp {
     if (!channel) throw this.refused(T.unknownChannel);
     const id = `${addressText(module.address)}-${channel.num}`;
     const { kind, key } = target;
-    if (kind === 'relay' && (key === 'switch' || key === 'light')) {
+    if (kind === 'relay' && Object.hasOwn(RELAY_FEATURES, key)) {
+      // Whatever feature it comes from (an older switch or light kept), a
+      // relay read only takes no command.
+      if (channel.num > 8) throw this.refused(T.unsupportedCommand);
+      if (
+        key === 'readonly' ||
+        relayKind(this.config, module.address, channel.num) === 'readonly'
+      ) {
+        this.logger.warn(`Relay ${id} REFUSED: read only in the configuration`);
+        throw this.refused(T.readOnly);
+      }
       const on = binaryOf(value);
       if (on === undefined) throw this.refused(fill(T.badValue, JSON.stringify(value)));
       return this.relay(module, channel.num, on === 1, asked, id);
@@ -753,10 +838,11 @@ export class VelbusApp {
   }
 
   /**
-   * Writes a command and waits for the module to confirm it. Throws Refused
-   * when nothing was sent, an Error when it was sent without confirmation.
+   * Queues a command frame. `written` resolves once it is on the socket, or
+   * rejects with Refused when nothing was sent; `done` resolves when the
+   * module confirms it, or rejects ("sent, without confirmation").
    */
-  async send(what, asked, frame, confirm, { module, check } = {}) {
+  write({ what, asked, frame, confirm, module, check }) {
     const label = word(what, 'en');
     if (!frame) throw this.refused(T.unsupportedCommand);
     if (!this.client.connected) {
@@ -765,29 +851,46 @@ export class VelbusApp {
     }
     if (this.now() > asked + TIMINGS.sendBy) {
       this.logger.warn(`Command NOT sent (${label}): too late`);
-      throw this.refused(T.tooLate);
+      throw this.refused(this.scanning ? T.busyScanning : T.tooLate);
     }
-    try {
-      await this.client.send(frame, {
+    let markWritten;
+    const writtenSignal = new Promise((resolve) => {
+      markWritten = resolve;
+    });
+    const done = this.client
+      .send(frame, {
         urgent: true,
         sendBy: asked + TIMINGS.sendBy,
         check,
         label,
+        ticket: { onWritten: () => markWritten() },
         wait: { match: this.matcher(module, confirm), until: asked + TIMINGS.answerBy },
-      });
-    } catch (err) {
-      if (err instanceof VelbusError && !err.sent) {
-        this.logger.warn(`Command NOT sent (${label}): ${err.message}`);
-        if (err.kind === 'withdrawn') throw this.refused(T.thermostatRefused);
-        if (err.kind === 'late') throw this.refused(T.tooLate);
-        if (err.kind === 'full') throw this.refused(T.queueFull);
-        throw this.refused(T.offline);
+      })
+      .then(
+        () => this.logger.info(`Command confirmed by the module (${label})`),
+        (err) => {
+          throw this.sendError(err, { label, what, module });
+        },
+      );
+    // Rejections are read by the caller (written, then done): none unhandled.
+    done.catch(() => undefined);
+    return { written: Promise.race([writtenSignal, done]), done };
+  }
+
+  sendError(err, { label, what, module }) {
+    if (err instanceof VelbusError && !err.sent) {
+      this.logger.warn(`Command NOT sent (${label}): ${err.message}`);
+      if (err.kind === 'withdrawn') return this.refused(T.thermostatRefused);
+      if ((err.kind === 'late' || err.kind === 'full') && this.scanning) {
+        return this.refused(T.busyScanning);
       }
-      this.logger.warn(`Command sent, NOT confirmed (${label}): ${err.message}`);
-      this.scheduleReadBack(module);
-      throw this.error(fill(T.unconfirmed, word(what, this.language)), err);
+      if (err.kind === 'late') return this.refused(T.tooLate);
+      if (err.kind === 'full') return this.refused(T.queueFull);
+      return this.refused(T.offline);
     }
-    this.logger.info(`Command confirmed by the module (${label})`);
+    this.logger.warn(`Command sent, NOT confirmed (${label}): ${err.message}`);
+    this.scheduleReadBack(module);
+    return this.error(fill(T.unconfirmed, word(what, this.language)), err);
   }
 
   scheduleReadBack(module) {
@@ -804,15 +907,15 @@ export class VelbusApp {
 
   relay(module, channel, on, asked, id) {
     const what = fill(COMMAND_NAMES.relay, id, on);
-    return this.serial(channelKey(module.address, channel), async () => {
+    return this.command(channelKey(module.address, channel), async () => {
       this.logger.info(`Relay from Gladys: ${word(what, 'en')}`);
-      await this.send(
+      return {
         what,
         asked,
-        relayCommand(module.spec, module.address, channel, on),
-        (u) => u.kind === 'relay' && u.channel === channel && u.on === on,
-        { module },
-      );
+        module,
+        frame: relayCommand(module.spec, module.address, channel, on),
+        confirm: (u) => u.kind === 'relay' && u.channel === channel && u.on === on,
+      };
     });
   }
 
@@ -821,7 +924,7 @@ export class VelbusApp {
     const { spec, address } = module;
     const scale = spec.sliderScale || 100;
     const what = fill(COMMAND_NAMES.dimmer, id, level === 'on' ? 'on' : level);
-    return this.serial(channelKey(address, channel), async () => {
+    return this.command(channelKey(address, channel), async () => {
       let frame;
       let confirm;
       if (level === 'on') {
@@ -837,7 +940,7 @@ export class VelbusApp {
           u.kind === 'dimmer' && u.channel === channel && Math.abs(u.level - raw) <= tolerance;
       }
       this.logger.info(`Dimmer from Gladys: ${word(what, 'en')}`);
-      await this.send(what, asked, frame, confirm, { module });
+      return { what, asked, module, frame, confirm };
     });
   }
 
@@ -845,7 +948,7 @@ export class VelbusApp {
   blind(module, channel, target, asked, id) {
     const { spec, address } = module;
     const what = fill(COMMAND_NAMES.blind, id, target);
-    return this.serial(channelKey(address, channel), async () => {
+    return this.command(channelKey(address, channel), async () => {
       let frame;
       let confirm;
       const mine = (u) => u.kind === 'blind' && u.channel === channel;
@@ -856,7 +959,11 @@ export class VelbusApp {
           velbus === 100
             ? blindCommand(spec, address, channel, 'down')
             : blindPositionCommand(spec, address, channel, velbus);
-        confirm = mine;
+        // A movement, or the blind already within 2 % of the position asked.
+        confirm = (u) =>
+          mine(u) &&
+          (u.motion !== 'stopped' ||
+            (u.position !== undefined && Math.abs(u.position - velbus) <= 2));
       } else {
         frame = blindCommand(spec, address, channel, target);
         const motion = { up: 'up', down: 'down', stop: 'stopped' }[target];
@@ -868,7 +975,7 @@ export class VelbusApp {
               u.position === (target === 'up' ? 0 : 100)));
       }
       this.logger.info(`Blind from Gladys: ${word(what, 'en')}`);
-      await this.send(what, asked, frame, confirm, { module });
+      return { what, asked, module, frame, confirm };
     });
   }
 
@@ -919,52 +1026,54 @@ export class VelbusApp {
     }
     // Velbus counts in half degrees.
     const value = Math.round(degrees * 2) / 2;
-    return this.serial(channelKey(module.address, channel), async () => {
+    return this.command(channelKey(module.address, channel), async () => {
       this.checkAllowed(what);
       const fresh = await this.freshThermostat(module, channel, asked);
       if (fresh.target === value) {
         this.logger.info(`Thermostat ${id} already at ${value} °C: nothing sent`);
-        return;
+        return undefined;
       }
       this.checkAllowed(what);
       this.logger.info(`SET POINT from Gladys: ${word(what, 'en')} (was ${fresh.target} °C)`);
-      await this.send(
+      return {
         what,
         asked,
-        setTemperatureCommand(module.spec, module.address, value),
-        (u) => u.kind === 'thermostat' && u.channel === channel && u.target === value,
-        { module, check: () => this.allowed() },
-      );
+        module,
+        frame: setTemperatureCommand(module.spec, module.address, value),
+        confirm: (u) => u.kind === 'thermostat' && u.channel === channel && u.target === value,
+        check: () => this.allowed(),
+      };
     });
   }
 
   preset(module, channel, preset, asked, id) {
     const what = fill(COMMAND_NAMES.preset, id, preset);
     this.checkAllowed(what);
-    return this.serial(channelKey(module.address, channel), async () => {
+    return this.command(channelKey(module.address, channel), async () => {
       this.checkAllowed(what);
       const fresh = await this.freshThermostat(module, channel, asked);
       if (fresh.preset === preset) {
         this.logger.info(`Thermostat ${id} already in ${preset}: nothing sent`);
-        return;
+        return undefined;
       }
       if (fresh.program === undefined) throw this.refused(T.stateUnknown);
       this.checkAllowed(what);
       this.logger.info(
         `PRESET from Gladys: ${word(what, 'en')} (was ${fresh.preset}, ${fresh.program})`,
       );
-      await this.send(
+      return {
         what,
         asked,
-        presetCommand(
+        module,
+        frame: presetCommand(
           module.spec,
           module.address,
           preset,
           sleepFor(fresh.program, fresh.sleepTimer),
         ),
-        (u) => u.kind === 'thermostat' && u.channel === channel && u.preset === preset,
-        { module, check: () => this.allowed() },
-      );
+        confirm: (u) => u.kind === 'thermostat' && u.channel === channel && u.preset === preset,
+        check: () => this.allowed(),
+      };
     });
   }
 

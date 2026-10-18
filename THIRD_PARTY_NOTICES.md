@@ -88,10 +88,11 @@ decided on a status read just before each command.
 <https://github.com/thomasdelaet/python-velbus>, by Thomas Delaet, MIT
 License. velbus-aio reuses part of it (its checksum function and many
 message classes keep his name), so the logic ported above partly comes from
-it. Its notice, as quoted in velbus-aio's `util.py`:
+it. Its licence is the MIT License; the text below is the `LICENSE` file of
+its repository (read on 2026-10-18):
 
 ```
-Copyright (c) 2017 Thomas Delaet
+Copyright 2017 Thomas Delaet
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

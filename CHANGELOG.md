@@ -25,6 +25,10 @@ the notes of the version's GitHub Release.
 - Push buttons as a scene trigger `button` (module, channel, action, name).
 - A "Test the connection" button; "Scan" scans the bus again.
 - French and English names, messages and guides.
+- Relays can be read only (`readonly` in "Relays: lights and read only"): a
+  state, no command; the "Output" relay 18 of the VMBEL and VMBGP-20 panels
+  is always read only.
+- The connection status shows the scan progress.
 
 ### Security
 
@@ -39,9 +43,27 @@ the notes of the version's GitHub Release.
 - Commands written within 3.5 s or not at all, confirmed by the module within
   4.5 s or reported "sent, without confirmation" with a read back; an answer
   only taken from a frame received after its request.
+- Docs and configuration: a switch or a light obeys voice assistants, the
+  MCP and the scenes; how to make a relay read only.
+- A certificate that is not the pinned one is shown with both fingerprints.
+- With a password, a session without any Velbus frame (twice) stops the
+  connection; the status never says "connected to the bus" before a frame.
+- Button events over the budget are refused at the entry; invalid frames
+  are counted with one warning per minute; the watchdog wants a module frame.
 - The frame stream is read in one forward pass with a 14-byte buffer; the
   write queues are bounded, a write buffer over 64 KB cuts the session;
   bursts of frames are published once; button events over 120 per minute
   are dropped.
+
+### Fixed
+
+- A stop or an off no longer waits for the confirmation of the command
+  before it: the channel is free as soon as a frame is written.
+- A command never shortens the pause after a channel name request; identical
+  background requests are merged; commands have a queue cap of their own.
+- A blind position is confirmed only by a movement or a position near the
+  target; a relay state is published on every relay feature it has.
+- The Discovery is republished once for a batch of channel names.
+- The password is no longer trimmed; the thermostat option applies at once.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-velbus/commits/main

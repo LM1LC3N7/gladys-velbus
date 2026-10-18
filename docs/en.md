@@ -32,8 +32,11 @@ about 20 seconds) at its first connection, then reads the names and the
 states of the modules. The devices show in the Discovery tab, one device
 per channel, named after the module (the names set in VelbusLink).
 
-- **Relays** (VMB4RYLD, VMB1RYNO, VMB4RYNO-20...): a **switch**, or a
-  **light** for the relays you list in "Relays that are lights".
+- **Relays** (VMB4RYLD, VMB1RYNO, VMB4RYNO-20...): a **switch** by default,
+  a **light** or a **read-only state** for the relays you list in "Relays:
+  lights and read only" (see "Relays and voice assistants" below). The
+  "Output" relay (channel 18) of the VMBEL and VMBGP-20 panels is always read
+  only.
 - **Dimmers** (VMB4DC, VMBDMI, VMB1DM, VMB4LEDPWM-20...): a **light** with its
   **brightness**. Turning it on brings back the last level when the module
   can.
@@ -48,8 +51,10 @@ per channel, named after the module (the names set in VelbusLink).
 - Modules with a temperature sensor but no thermostat: the temperature.
 - **Push buttons** (VMBGP*, VMB8PB, VMB6IN, VMBEL*...): no device, a **scene
   trigger** "Velbus push button" with the module address (hexadecimal, as in
-  VelbusLink, e.g. `1A`), the channel and the action (pressed, held,
-  released). Leave a field empty to match any value. The scene gets
+  VelbusLink: **2 upper-case hexadecimal digits**, e.g. `1A` or `05`, never
+  `1a` nor the decimal `26`: Gladys compares it as written), the channel and
+  the action (pressed, held, released). Leave a field empty to match any
+  value. The scene gets
   `module`, `channel`, `action` and `name`.
 
 Not supported in this version: DALI modules (VMBDALI), counters, analog
@@ -67,14 +72,16 @@ buttons, the edge lighting of the VMBEL panels, the memo texts, the clock.
    only to the gateway, never written in the logs. It is **only sent over
    TLS**: with "TCP gateway" it is never sent (the status says so).
 5. **Signum certificate fingerprint** (optional, recommended with a
-   password): at the first TLS connection, the integration writes the SHA-256
-   fingerprint of the Signum certificate in its logs. Copy it here: from then
-   on, a gateway with another certificate gets no password and the connection
-   stops.
-6. **Relays that are lights** (optional), for example `1A-1, 1A-3, 2B-2`
-   (address in hexadecimal, channel). Changing the kind of a relay already
-   created in Gladys adds a new feature and keeps the old one (and its
-   history): delete the old one by hand if you no longer want it.
+   password): connect a first time **without the password**; the integration
+   writes the SHA-256 fingerprint of the Signum certificate in its logs. Copy
+   it here, then enter the password: from then on, a gateway with another
+   certificate gets no password and the connection stops, and the status
+   shows both fingerprints.
+6. **Relays: lights and read only** (optional), for example
+   `1A-1, 1A-3:light, 2B-2:readonly` (address in hexadecimal, channel, kind;
+   no kind = light). Changing the kind of a relay already created in Gladys
+   adds a new feature and keeps the old one (and its history): delete the old
+   one by hand if you no longer want it.
 7. **Allow changing the thermostats from Gladys**: off by default.
 8. **Language of the names**: French or English (used when a module gives
    no name).
@@ -87,6 +94,21 @@ many modules and channels were found (and which modules are not supported).
 moved to another address). A reconnection does not scan again: it reads the
 states of the known modules.
 
+## Relays and voice assistants
+
+A relay shown as a **switch or a light obeys every command Gladys relays**:
+Google Home, Alexa, the MCP ("turn off the switches of the living room"),
+HomeKit, and the scenes acting on switches or lights. Some relays must never
+be switched off that way: a **pump**, the **ventilation**, the **heating**, a
+**freezer**, a **door strike**, a **valve**, or the **virtual relays** used by
+the Velbus programs.
+
+For each of them: add it as `readonly` in "Relays: lights and read only"
+(e.g. `2B-2:readonly`), save, then **delete its old switch or light
+feature** in Gladys (the integration keeps a feature you created, and refuses
+any command on a read-only relay, the old feature included: "read only,
+nothing was sent"). The relay then shows its state only.
+
 ## How commands work
 
 - A command is written on the bus within 3.5 s of the request, or refused
@@ -95,8 +117,10 @@ states of the known modules.
   channel on the bus) until 4.5 s. Without it, the command is reported "sent,
   without confirmation" and the channel is read again two seconds later: it
   is never reported "not sent".
-- The commands of a channel go one at a time; the scan never delays a
-  command.
+- The commands of a channel are written one at a time, but a command never
+  waits for the confirmation of the one before: a stop is written at once
+  while a blind is still moving. The scan never delays a command; a command
+  refused while the scan keeps the bus busy says so.
 - Every command is written in the integration logs.
 
 ## Thermostats
@@ -113,7 +137,8 @@ states of the known modules.
   step). The set point changed is the one of the current mode.
 - The modes: Velbus "comfort" is Gladys **Comfort**, "night" **Night**,
   "safe" **Frost protection**; Velbus "day" (between night and comfort) has
-  no twin in Gladys and shows as **Eco**, labelled "Day". When the mode is
+  no twin in Gladys and shows as **Eco**, labelled "Day": asking **Eco** from
+  Gladys puts the thermostat in "day". When the mode is
   changed, the thermostat keeps its program state (following its program,
   manual, or sleep timer), as velbus-aio does.
 
@@ -129,7 +154,11 @@ states of the known modules.
   a restart (a wrong password is not tried in a loop). Fix the password then
   save, or click "Test the connection". The file `/data/velbus-state.json`
   keeps only the place concerned (`tls://address:port`), never the password.
-- The same goes when the certificate is not the pinned one.
+- The same goes when the gateway takes the password but sends **no Velbus
+  frame** within 30 s, twice in a row (wrong password, or not a Velbus
+  gateway), and when the certificate is not the pinned one.
+- The status says "connected to the Velbus bus" only once a Velbus frame came
+  in; until then it says "connected to the gateway".
 
 ## Known limits
 

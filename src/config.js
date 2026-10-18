@@ -51,7 +51,7 @@ export function normalizeFingerprint(raw) {
 }
 
 /**
- * Relays shown as lights: `1A-1, 1A-3:light, 2B-2:switch` -> Map("1a-1" -> kind).
+ * Relays shown as lights or read only: `1A-1, 1A-3:light, 2B-2:readonly` -> Map("1a-1" -> kind).
  * Addresses in hexadecimal as VelbusLink shows them; an entry without kind is
  * a light (a relay not listed is a switch). Wrong entries are reported, not fatal.
  */
@@ -102,7 +102,8 @@ export function normalizeConfig(raw = {}) {
     // `tls://` typed with the address wins too.
     tls:
       (scheme ?? (CONNECTIONS.includes(connection) ? connection : DEFAULTS.connection)) === 'tls',
-    password: typeof raw?.password === 'string' ? raw.password.trim() : '',
+    // As typed: a space may be part of a Signum key.
+    password: typeof raw?.password === 'string' ? raw.password : '',
     fingerprint: normalizeFingerprint(typedFingerprint),
     fingerprintInvalid: typedFingerprint !== '' && normalizeFingerprint(typedFingerprint) === '',
     relayKinds: relays.kinds,

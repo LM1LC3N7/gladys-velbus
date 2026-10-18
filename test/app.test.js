@@ -8,6 +8,7 @@ import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
 import { VelbusApp } from '../src/app.js';
 import { registerHandlers } from '../src/handlers.js';
 import { memoryStore } from '../src/store.js';
+import { encode } from '../src/velbus/frame.js';
 import { FakeBus, FakeClock, quietLogger, settle, until } from './helpers/fakeBus.js';
 
 const BASE = { host: '192.0.2.30', language: 'en' };
@@ -355,6 +356,9 @@ test('nothing reaches Object.prototype from the bus or the configuration', async
   ctx.bus.frame(0xfb, 0x1a, [0xfb, 0x80, 0, 1, 0, 0, 0, 0]);
   await settle();
   await ctx.app.chain;
+  // Names go to the Discovery after 2 s of quiet.
+  await ctx.clock.advance(3_000);
+  await ctx.app.chain;
   assert.equal({}.light, undefined);
   assert.equal(Object.prototype.on, undefined);
   assert.equal(ctx.device(ctx.ids('relay', '1a-1').device).name, '__proto__');
@@ -445,7 +449,11 @@ test('a pinned certificate that differs: stopped, the password never sent', asyn
   });
   await ctx.clock.advance(1_000);
   await ctx.app.chain;
-  assert.match(ctx.status().message.en, /not the pinned one.*password was not sent/);
+  assert.match(
+    ctx.status().message.en,
+    /SHA-256 ab:cd\) is not the pinned one \(00:00:.*password was not sent/,
+  );
+  assert.match(ctx.logger.lines.join('\n'), /SHA-256 ab:cd\) is not the pinned one \(00:00/);
   assert.equal(ctx.bus.current.written.length, 0);
   assert.equal(ctx.store.data.stop.kind, 'certificate_changed');
   // The right pin connects.
@@ -476,4 +484,190 @@ test('Gladys reconnects: devices, states and status sent again', async (t) => {
   await ctx.app.chain;
   assert.ok(ctx.gladys.fake.bodies('POST', '/discovered_device').length > count);
   assert.equal(ctx.status().connected, true);
+});
+
+const BLIND_STATUS = (channel, motion, position) => [
+  0xec,
+  1 << (channel - 1),
+  0x0f,
+  motion,
+  0,
+  position,
+  0,
+  0,
+];
+
+test('B2: a stop is written at once, even while a close waits for its confirmation', async (t) => {
+  const ctx = await setup(t);
+  ctx.bus.hold = (f) => f.address === 0x30 && f.data[0] === 0x06;
+  const close = ctx.set('blind', '30-1', 'state', -1);
+  await ctx.clock.advance(500);
+  const stop = ctx.set('blind', '30-1', 'state', 0);
+  await ctx.clock.advance(300);
+  assert.deepEqual(ctx.bus.commands.slice(-2), [
+    [0x30, 0x06, 0x01, 0, 0, 0],
+    [0x30, 0x04, 0x01],
+  ]);
+  assert.equal((await stop).success, true);
+  await ctx.clock.advance(6_000);
+  const closed = await close;
+  assert.equal(closed.success, false);
+  assert.match(closed.error, /without confirmation/);
+});
+
+test('B1: a relay in read only: a state, no command, not even from the old switch feature', async (t) => {
+  const gladys0 = createFakeGladys({ config: BASE });
+  const old = gladys0.externalIds('relay', '1a-1');
+  const created = [
+    {
+      name: 'Pompe',
+      external_id: old.device,
+      features: [
+        {
+          name: 'Relay',
+          external_id: old.feature('switch'),
+          category: 'switch',
+          type: 'binary',
+          read_only: false,
+          min: 0,
+          max: 1,
+        },
+      ],
+    },
+  ];
+  const ctx = await setup(t, { config: { relay_kinds: '1A-1:readonly' }, devices: created });
+  const device = ctx.device(ctx.ids('relay', '1a-1').device);
+  const readonly = device.features.find((f) => f.external_id.endsWith(':readonly'));
+  assert.deepEqual(
+    [readonly.category, readonly.type, readonly.read_only],
+    ['unknown', 'binary', true],
+  );
+  assert.ok(
+    device.features.some((f) => f.external_id.endsWith(':switch')),
+    'the old feature kept',
+  );
+  assert.equal(ctx.state(ctx.ids('relay', '1a-1').feature('readonly')), 0);
+  assert.equal(ctx.state(ctx.ids('relay', '1a-1').feature('switch')), 0, 'M2: state on every key');
+  const before = ctx.bus.log.length;
+  for (const key of ['switch', 'readonly']) {
+    const ack = await ctx.command('relay', '1a-1', key, 1, 100);
+    assert.equal(ack.success, false);
+    assert.match(ack.error, /read only.*nothing was sent/);
+  }
+  assert.equal(ctx.bus.log.length, before);
+});
+
+test('I5: the Output relay (channel 18) of a VMBEL1 is read only', async (t) => {
+  const modules = {
+    0x60: {
+      type: 0x34,
+      serial: 1,
+      nameVariant: 'index',
+      names: {},
+      thermostat: { current: 20, target: 20, preset: 'day' },
+    },
+  };
+  const ctx = await setup(t, { bus: { modules } });
+  const output = ctx.device(ctx.ids('relay', '60-18').device);
+  assert.deepEqual(
+    output.features.map((f) => [f.category, f.read_only]),
+    [['unknown', true]],
+  );
+  const ack = await ctx.command('relay', '60-18', 'readonly', 1, 100);
+  assert.match(ack.error, /does not take this command/);
+});
+
+test('I2: a 50 KB burst of button frames is bounded at the entry', async (t) => {
+  const ctx = await setup(t);
+  const one = encode({ priority: 0xf8, address: 0x40, data: [0x00, 0x01, 0x00, 0x00] });
+  const burst = Buffer.concat(new Array(Math.ceil(50_000 / one.length)).fill(one));
+  ctx.bus.current.raw(burst);
+  await settle(40);
+  await ctx.app.chain;
+  assert.ok(ctx.gladys.fake.sceneEvents.length <= 120, `${ctx.gladys.fake.sceneEvents.length}`);
+  assert.ok(ctx.app.publisher.dropped > 4000);
+  assert.equal(ctx.app.pendingEvents.length, 0);
+  assert.match(ctx.logger.lines.join('\n'), /Scene events refused: more than 120 per minute/);
+});
+
+test('I3: names republish the Discovery after 2 s of quiet, 10 s at most', async (t) => {
+  const ctx = await setup(t);
+  const count = () => ctx.gladys.fake.bodies('POST', '/discovered_device').length;
+  const name = (text) => {
+    const bytes = [...Buffer.from(text.padEnd(16, ' '))];
+    ctx.bus.frame(0xfb, 0x1a, [0xf0, 0x04, ...bytes.slice(0, 6)]);
+    ctx.bus.frame(0xfb, 0x1a, [0xf1, 0x04, ...bytes.slice(6, 12)]);
+    ctx.bus.frame(0xfb, 0x1a, [0xf2, 0x04, ...bytes.slice(12, 16)]);
+  };
+  const before = count();
+  for (let i = 0; i < 8; i += 1) {
+    name(`Name ${i}`);
+    await ctx.clock.advance(1_500);
+    await ctx.app.chain;
+  }
+  assert.equal(count() - before, 1, 'one publication within the 12 s');
+  await ctx.clock.advance(2_500);
+  await ctx.app.chain;
+  assert.equal(count() - before, 2);
+  assert.equal(ctx.device(ctx.ids('relay', '1a-3').device).name, 'Name 7');
+});
+
+test('I6: a gateway that takes the password but sends no frame, twice: stopped', async (t) => {
+  const store = memoryStore();
+  const ctx = await setup(t, {
+    config: { connection: 'tls', password: 'key' },
+    bus: { password: 'key' },
+    store,
+    scan: false,
+  });
+  ctx.bus.hold = () => true;
+  await ctx.clock.advance(31_000);
+  await ctx.app.chain;
+  assert.match(ctx.status().message.en, /next try in 10 s/);
+  await ctx.clock.advance(41_000);
+  await ctx.app.chain;
+  assert.match(ctx.status().message.en, /no Velbus frame, twice.*no new try/);
+  assert.equal(store.data.stop.kind, 'no_frames');
+  assert.ok(
+    ctx.gladys.fake.connectionStatuses.every(
+      (s) => !/Connected to the Velbus bus/.test(s.message?.en ?? ''),
+    ),
+  );
+});
+
+test('M1: a position is confirmed by a movement or a position within 2 %', async (t) => {
+  const ctx = await setup(t);
+  ctx.bus.hold = (f) => f.address === 0x30 && f.data[0] === 0x1c;
+  const pending = ctx.set('blind', '30-1', 'position', 30);
+  await ctx.clock.advance(200);
+  ctx.bus.frame(0xfb, 0x30, BLIND_STATUS(1, 0, 40));
+  await ctx.clock.advance(200);
+  ctx.bus.frame(0xfb, 0x30, BLIND_STATUS(1, 0, 69));
+  await ctx.clock.advance(5_000);
+  assert.equal((await pending).success, true);
+  ctx.bus.hold = (f) => f.address === 0x30 && f.data[0] === 0x1c;
+  const far = ctx.set('blind', '30-1', 'position', 50);
+  await ctx.clock.advance(200);
+  ctx.bus.frame(0xfb, 0x30, BLIND_STATUS(1, 0, 40));
+  await ctx.clock.advance(5_000);
+  assert.equal((await far).success, false);
+});
+
+test('M5, M10, M12: refusal during the scan, option applied at once, scan progress', async (t) => {
+  const ctx = await setup(t, { config: { allow_thermostat: true } });
+  assert.ok(
+    ctx.gladys.fake.connectionStatuses.some((s) =>
+      /scanning the Velbus bus \((?!0\/)\d+\/254\)/.test(s.message?.en ?? ''),
+    ),
+  );
+  const module = ctx.app.model.modules.get(0x1a);
+  ctx.app.scanning = Promise.resolve();
+  await assert.rejects(
+    ctx.app.relay(module, 1, true, ctx.clock.now() - 10_000, '1A-1'),
+    /scan of the bus is in progress/,
+  );
+  ctx.app.scanning = undefined;
+  const update = ctx.app.configUpdated({ ...BASE, host: '192.0.2.99', allow_thermostat: false });
+  assert.equal(ctx.app.allowed(), false);
+  await update;
 });

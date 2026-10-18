@@ -35,8 +35,11 @@ les noms et les états des modules. Les appareils apparaissent dans l'onglet
 Découverte, un appareil par canal, nommé d'après le module (les noms définis
 dans VelbusLink).
 
-- **Relais** (VMB4RYLD, VMB1RYNO, VMB4RYNO-20…) : un **interrupteur**, ou une
-  **lumière** pour les relais listés dans « Relais qui sont des lumières ».
+- **Relais** (VMB4RYLD, VMB1RYNO, VMB4RYNO-20…) : un **interrupteur** par
+  défaut, une **lumière** ou un **état en lecture seule** pour les relais
+  listés dans « Relais : lumières et lecture seule » (voir « Relais et
+  assistants vocaux » plus bas). Le relais « Output » (canal 18) des panneaux
+  VMBEL et VMBGP-20 est toujours en lecture seule.
 - **Variateurs** (VMB4DC, VMBDMI, VMB1DM, VMB4LEDPWM-20…) : une **lumière**
   avec sa **luminosité**. L'allumer remet le dernier niveau quand le module
   le permet.
@@ -52,9 +55,10 @@ dans VelbusLink).
   température.
 - **Boutons poussoirs** (VMBGP*, VMB8PB, VMB6IN, VMBEL*…) : pas d'appareil,
   un **déclencheur de scène** « Bouton poussoir Velbus » avec l'adresse du
-  module (hexadécimale, comme dans VelbusLink, par ex. `1A`), le canal et
-  l'action (appuyé, maintenu, relâché). Laissez un champ vide pour accepter
-  toute valeur. La scène reçoit `module`, `channel`, `action` et `name`.
+  module (hexadécimale, comme dans VelbusLink : **2 chiffres hexadécimaux en
+  majuscules**, par ex. `1A` ou `05`, jamais `1a` ni le décimal `26` :
+  Gladys la compare telle quelle), le canal et l'action (appuyé, maintenu,
+  relâché). Laissez un champ vide pour accepter toute valeur. La scène reçoit `module`, `channel`, `action` et `name`.
 
 Pas pris en charge dans cette version : les modules DALI (VMBDALI), les
 compteurs, les entrées analogiques, la station météo, les détecteurs PIR
@@ -73,15 +77,16 @@ panneaux VMBEL, les textes mémo, l'horloge.
    journaux. Il n'est **envoyé qu'en TLS** : avec « Passerelle TCP », il
    n'est jamais envoyé (l'état le signale).
 5. **Empreinte du certificat du Signum** (facultatif, conseillé avec un mot
-   de passe) : à la première connexion TLS, l'intégration écrit dans ses
-   journaux l'empreinte SHA-256 du certificat du Signum. Copiez-la ici :
-   désormais, une passerelle avec un autre certificat ne reçoit pas le mot de
-   passe et la connexion s'arrête.
-6. **Relais qui sont des lumières** (facultatif), par exemple
-   `1A-1, 1A-3, 2B-2` (adresse en hexadécimal, canal). Changer le type d'un
-   relais déjà créé dans Gladys ajoute une nouvelle fonctionnalité et garde
-   l'ancienne (et son historique) : supprimez l'ancienne à la main si vous
-   n'en voulez plus.
+   de passe) : connectez-vous une première fois **sans le mot de passe** ;
+   l'intégration écrit dans ses journaux l'empreinte SHA-256 du certificat du
+   Signum. Copiez-la ici, puis saisissez le mot de passe : désormais, une
+   passerelle avec un autre certificat ne reçoit pas le mot de passe, la
+   connexion s'arrête et l'état affiche les deux empreintes.
+6. **Relais : lumières et lecture seule** (facultatif), par exemple
+   `1A-1, 1A-3:light, 2B-2:readonly` (adresse en hexadécimal, canal, type ;
+   sans type = lumière). Changer le type d'un relais déjà créé dans Gladys
+   ajoute une nouvelle fonctionnalité et garde l'ancienne (et son
+   historique) : supprimez l'ancienne à la main si vous n'en voulez plus.
 7. **Autoriser le réglage des thermostats depuis Gladys** : désactivé par
    défaut.
 8. **Langue des noms** : français ou anglais (utilisée quand un module ne
@@ -96,6 +101,22 @@ quels modules ne sont pas pris en charge).
 (nouveaux modules, module déplacé à une autre adresse). Une reconnexion ne
 relance pas la recherche : elle relit les états des modules connus.
 
+## Relais et assistants vocaux
+
+Un relais montré comme **interrupteur ou lumière obéit à toutes les
+commandes que Gladys relaie** : Google Home, Alexa, le MCP (« éteins les
+interrupteurs du salon »), HomeKit, et les scènes qui agissent sur les
+interrupteurs ou les lumières. Certains relais ne doivent jamais être coupés
+ainsi : une **pompe**, la **VMC**, le **chauffage**, un **congélateur**, une
+**gâche**, une **vanne**, ou les **relais virtuels** des programmes Velbus.
+
+Pour chacun : ajoutez-le en `readonly` dans « Relais : lumières et lecture
+seule » (par ex. `2B-2:readonly`), enregistrez, puis **supprimez son
+ancienne fonctionnalité interrupteur ou lumière** dans Gladys (l'intégration
+garde une fonctionnalité que vous avez créée, et refuse toute commande sur un
+relais en lecture seule, ancienne fonctionnalité comprise : « lecture seule,
+rien n'a été envoyé »). Le relais ne montre alors que son état.
+
 ## Fonctionnement des commandes
 
 - Une commande est écrite sur le bus dans les 3,5 s qui suivent la demande,
@@ -105,8 +126,11 @@ relance pas la recherche : elle relit les états des modules connus.
   canal sur le bus) jusqu'à 4,5 s. Sans confirmation, la commande est
   annoncée « envoyée, sans confirmation » et le canal est relu deux secondes
   plus tard : elle n'est jamais annoncée « non envoyée ».
-- Les commandes d'un même canal passent une par une ; la recherche des
-  modules ne retarde jamais une commande.
+- Les commandes d'un même canal sont écrites une par une, mais une commande
+  n'attend jamais la confirmation de la précédente : un arrêt est écrit tout
+  de suite pendant qu'un volet bouge encore. La recherche des modules ne
+  retarde jamais une commande ; une commande refusée parce que la recherche
+  occupe le bus le dit.
 - Chaque commande est écrite dans les journaux de l'intégration.
 
 ## Thermostats
@@ -124,7 +148,7 @@ relance pas la recherche : elle relit les états des modules connus.
 - Les modes : « comfort » Velbus est **Confort** dans Gladys, « night »
   **Nuit**, « safe » **Hors gel** ; « day » (entre nuit et confort) n'a pas
   d'équivalent dans Gladys et apparaît comme **Éco**, avec le libellé
-  « Jour ». Quand le mode change, le thermostat garde son état de programme
+  « Jour » : demander **Éco** depuis Gladys met le thermostat en « jour ». Quand le mode change, le thermostat garde son état de programme
   (suit son programme, manuel, ou minuterie), comme le fait velbus-aio.
 
 ## Connexion
@@ -140,7 +164,12 @@ relance pas la recherche : elle relit les états des modules connus.
   boucle). Corrigez le mot de passe puis enregistrez, ou cliquez sur
   « Tester la connexion ». Le fichier `/data/velbus-state.json` ne garde que
   l'endroit concerné (`tls://adresse:port`), jamais le mot de passe.
-- De même quand le certificat n'est pas celui épinglé.
+- De même quand la passerelle prend le mot de passe mais n'envoie **aucune
+  trame Velbus** dans les 30 s, deux fois de suite (mauvais mot de passe, ou
+  pas une passerelle Velbus), et quand le certificat n'est pas celui
+  épinglé.
+- L'état ne dit « connecté au bus Velbus » qu'une fois une trame Velbus
+  reçue ; avant, il dit « connecté à la passerelle ».
 
 ## Limites connues
 
